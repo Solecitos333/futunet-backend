@@ -1,27 +1,39 @@
 import os
 import json
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+import firebase_admin
+from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
-from main import Base, ProductModel
 
 load_dotenv()
 
-# --- Configuración de Base de Datos ---
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./futunet.db"
+# --- Inicialización de Firebase ---
+firebase_initialized = False
+db = None
 
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+cred_json = os.getenv("FIREBASE_CREDENTIALS")
+if cred_json:
+    try:
+        cred_dict = json.loads(cred_json)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        firebase_initialized = True
+    except Exception as e:
+        print(f"Error con FIREBASE_CREDENTIALS: {e}")
+else:
+    service_account_path = os.path.join(os.path.dirname(__file__), "firebase-service-account.json")
+    if os.path.exists(service_account_path):
+        try:
+            cred = credentials.Certificate(service_account_path)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            firebase_initialized = True
+        except Exception as e:
+            print(f"Error con archivo local: {e}")
 
-print(f"Conectando a base de datos para seeding: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-db = SessionLocal()
-
-# Asegurar que las tablas existan
-Base.metadata.create_all(bind=engine)
+if not firebase_initialized:
+    print("❌ Error: No se encontraron credenciales de Firebase. Configura la variable de entorno FIREBASE_CREDENTIALS o coloca el archivo firebase-service-account.json en esta carpeta.")
+    exit(1)
 
 # Ruta del archivo JSON de respaldo de productos
 json_path = os.path.join("..", "proyecto_github_pages", "scratch_products.json")
@@ -50,25 +62,27 @@ def parse_array_field(field_data):
 
 def seed_database():
     if not os.path.exists(json_path):
-        print(f"Error: No se encontró el archivo de datos en {json_path}")
+        print(f"❌ Error: No se encontró el archivo de datos en {json_path}")
         return
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     documents = data.get("documents", [])
-    print(f"Encontrados {len(documents)} documentos en el archivo JSON.")
+    print(f"📖 Leyendo {len(documents)} productos del respaldo JSON...")
 
+    products_ref = db.collection("products")
+    batch = db.batch()
     count = 0
+    total_committed = 0
+
     for doc in documents:
         fields = doc.get("fields", {})
         if not fields:
             continue
 
-        # Extraer campos de forma segura
         p_id = fields.get("id", {}).get("stringValue")
         if not p_id:
-            # Si no tiene ID, lo obtenemos de la ruta del nombre del documento
             name_path = doc.get("name", "")
             p_id = name_path.split("/")[-1] if name_path else None
 
@@ -83,7 +97,6 @@ def seed_database():
         img = fields.get("img", {}).get("stringValue", "")
         desc = fields.get("desc", {}).get("stringValue", "")
         
-        # El booleano puede venir como booleanValue
         is_active = fields.get("isActive", {}).get("booleanValue")
         if is_active is None:
             is_active = True
@@ -91,45 +104,37 @@ def seed_database():
         specs = parse_array_field(fields.get("specs"))
         gallery = parse_array_field(fields.get("gallery"))
 
-        # Crear o actualizar en la base de datos
-        existing_product = db.query(ProductModel).filter(ProductModel.id == p_id).first()
-        if existing_product:
-            existing_product.title = title
-            existing_product.brand = brand
-            existing_product.category = category
-            existing_product.department = department
-            existing_product.price = price
-            existing_product.img = img
-            existing_product.desc = desc
-            existing_product.specs = specs
-            existing_product.gallery = gallery
-            existing_product.isActive = is_active
-        else:
-            new_product = ProductModel(
-                id=p_id,
-                title=title,
-                brand=brand,
-                category=category,
-                department=department,
-                price=price,
-                img=img,
-                desc=desc,
-                specs=specs,
-                gallery=gallery,
-                isActive=is_active
-            )
-            db.add(new_product)
+        doc_ref = products_ref.document(p_id)
         
-        count += 1
+        product_data = {
+            "id": p_id,
+            "title": title,
+            "brand": brand,
+            "category": category,
+            "department": department,
+            "price": price,
+            "img": img,
+            "desc": desc,
+            "specs": specs,
+            "gallery": gallery,
+            "isActive": is_active
+        }
 
-    try:
-        db.commit()
-        print(f"Seeding completado con éxito. {count} productos procesados en la base de datos.")
-    except Exception as e:
-        db.rollback()
-        print(f"Error al guardar los datos en la base de datos: {e}")
-    finally:
-        db.close()
+        batch.set(doc_ref, product_data)
+        count += 1
+        total_committed += 1
+
+        if count >= 450:
+            batch.commit()
+            print(f"📦 Lote de {count} productos guardado en Firestore...")
+            batch = db.batch()
+            count = 0
+
+    if count > 0:
+        batch.commit()
+        print(f"📦 Último lote de {count} productos guardado en Firestore...")
+
+    print(f"✅ Seeding completado. {total_committed} productos actualizados/cargados en Firebase Firestore.")
 
 if __name__ == "__main__":
     seed_database()

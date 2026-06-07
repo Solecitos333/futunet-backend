@@ -1,25 +1,26 @@
-# Futunet Backend - API & Sincronización
+# Futunet Backend - API & Sincronización (Firebase Edition)
 
-Este repositorio contiene la API dinámica y los scripts de automatización para **Futunet** desarrollados en Python con **FastAPI** y **PostgreSQL**.
+Este repositorio contiene la API dinámica y los scripts de automatización para **Futunet** desarrollados en Python con **FastAPI** y **Firebase Firestore** (Base de Datos permanente y gratuita).
 
 ---
 
 ## Estructura del Proyecto
 
-*   `main.py`: Código del servidor FastAPI con los endpoints de productos y cotizaciones.
-*   `seed.py`: Script de carga inicial (seeding) para migrar los productos del catálogo desde el JSON estático de la web a PostgreSQL.
+*   `main.py`: Código del servidor FastAPI con los endpoints de consulta de productos y cotizaciones.
+*   `seed.py`: Script para cargar/restaurar los productos del catálogo desde el JSON estático de la web directamente hacia Firebase.
 *   `requirements.txt`: Dependencias de Python necesarias.
 
 ---
 
 ## Configuración y Despliegue en Render
 
-### 1. Crear la Base de Datos en Render
-1. Ve al panel de control de Render y haz clic en **New** -> **PostgreSQL**.
-2. Nómbrala `futunet-db`, selecciona el plan **Free** y haz clic en **Create Database**.
-3. Copia el valor de **External Database URL** (se usará localmente para el seed) y **Internal Database URL** (se usará en Render).
+### 1. Obtener la clave privada de Firebase
+1. Ve a la consola de Firebase: [console.firebase.google.com](https://console.firebase.google.com).
+2. Haz clic en el ícono de engranaje (Configuración) -> **Configuración del proyecto**.
+3. Ve a la pestaña **Cuentas de servicio** (Service accounts).
+4. Haz clic en **Generar nueva clave privada**. Esto descargará un archivo `.json` privado a tu computadora.
 
-### 2. Desplegar el Web Service en Render
+### 2. Desplegar en Render
 1. Sube este repositorio a tu cuenta de GitHub.
 2. En Render, haz clic en **New** -> **Web Service** y selecciona este repositorio.
 3. Configura las siguientes opciones:
@@ -28,25 +29,27 @@ Este repositorio contiene la API dinámica y los scripts de automatización para
     *   **Build Command**: `pip install -r requirements.txt`
     *   **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 4. En la pestaña **Environment**, añade la siguiente variable de entorno:
-    *   `DATABASE_URL`: (Pega la **Internal Database URL** de tu base de datos de Render).
+    *   **Clave**: `FIREBASE_CREDENTIALS`
+    *   **Valor**: Abre el archivo `.json` descargado de Firebase, copia **todo su contenido** (debe ser un JSON completo con `{ ... }`) y pégalo completo en el valor de esta variable.
+    *   *(Opcional)* **Clave**: `SYNC_TOKEN` | **Valor**: `un_token_secreto_para_sincronizaciones` (sirve para proteger el endpoint de carga).
 5. Haz clic en **Deploy Web Service**.
 
 ---
 
-## Carga de Productos (Seeding) a PostgreSQL
+## Ejecución y Pruebas Locales
 
-Para importar tus productos actuales a la base de datos de Render:
+Para ejecutar el servidor o el script de carga localmente en tu computadora:
 
-1. Instala las dependencias localmente:
+1. Instala las dependencias:
    ```bash
    pip install -r requirements.txt
    ```
-2. Crea un archivo `.env` en la raíz de este proyecto y añade tu URL de base de datos externa:
-   ```env
-   DATABASE_URL=tu_external_database_url_aqui
-   ```
-3. Ejecuta el script de seeding:
+2. Renombra el archivo `.json` descargado de Firebase como `firebase-service-account.json` y colócalo en la raíz de esta carpeta.
+3. Ejecuta el script de carga inicial:
    ```bash
    python seed.py
    ```
-   *(Este script leerá el archivo `scratch_products.json` de tu proyecto web y cargará todos los productos directamente en la base de datos PostgreSQL de Render).*
+4. Para iniciar el servidor de desarrollo localmente:
+   ```bash
+   uvicorn main:app --reload
+   ```

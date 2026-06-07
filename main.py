@@ -1,151 +1,167 @@
 import os
+import json
 from typing import List, Optional
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Boolean, Text, JSON
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+import firebase_admin
+from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Configuración de Base de Datos ---
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    # Fallback para desarrollo local (puedes cambiarlo si deseas usar sqlite localmente)
-    DATABASE_URL = "sqlite:///./futunet.db"
+# --- Inicialización de Firebase Admin ---
+firebase_initialized = False
+db = None
 
-# Si es postgres, nos aseguramos de usar psycopg2
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# Creamos el motor de base de datos
-# Para sqlite necesitamos connect_args={"check_same_thread": False}
-if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+cred_json = os.getenv("FIREBASE_CREDENTIALS")
+if cred_json:
+    try:
+        cred_dict = json.loads(cred_json)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        firebase_initialized = True
+        print("🔥 Firebase Admin inicializado mediante variable de entorno.")
+    except Exception as e:
+        print(f"❌ Error al inicializar Firebase con FIREBASE_CREDENTIALS: {e}")
 else:
-    engine = create_engine(DATABASE_URL)
+    service_account_path = os.path.join(os.path.dirname(__file__), "firebase-service-account.json")
+    if os.path.exists(service_account_path):
+        try:
+            cred = credentials.Certificate(service_account_path)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            firebase_initialized = True
+            print("🔥 Firebase Admin inicializado mediante archivo local.")
+        except Exception as e:
+            print(f"❌ Error al inicializar Firebase con archivo local: {e}")
+    else:
+        print("⚠️ Advertencia: No se encontraron credenciales de Firebase. La API funcionará en modo degradado.")
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# --- Inicialización de FastAPI ---
+app = FastAPI(
+    title="Futunet API",
+    description="Backend dinámico para sincronización de inventario y utilidades de Futunet",
+    version="2.0.0"
+)
 
-# --- Modelos de SQLAlchemy ---
-class ProductModel(Base):
-    __tablename__ = "products"
-
-    id = Column(String, primary_key=True, index=True)
-    title = Column(String, nullable=False, index=True)
-    brand = Column(String, index=True)
-    category = Column(String, index=True)
-    department = Column(String, index=True)
-    price = Column(String)
-    img = Column(String)
-    desc = Column(Text)
-    specs = Column(JSON, default=[])
-    gallery = Column(JSON, default=[])
-    isActive = Column(Boolean, default=True)
-
-# Crear tablas
-Base.metadata.create_all(bind=engine)
+# Habilitar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Esquemas de Pydantic ---
-class ProductSchema(BaseModel):
-    id: str
+class ProductSyncItem(BaseModel):
     title: str
-    brand: Optional[str] = None
-    category: Optional[str] = None
-    department: Optional[str] = None
-    price: Optional[str] = None
-    img: Optional[str] = None
-    desc: Optional[str] = None
-    specs: List[str] = []
+    brand: str
+    category: str
+    price: str
+    img: str
     gallery: List[str] = []
-    isActive: bool = True
-
-    class Config:
-        from_attributes = True
+    desc: str = ""
+    specs: List[str] = []
+    department: str = "general"
 
 class QuoteRequest(BaseModel):
     client_name: str
     client_email: str
     client_phone: str
     message: str
-    products: List[dict] # Lista de productos solicitados con cantidad
-
-# --- Inicialización de FastAPI ---
-app = FastAPI(
-    title="Futunet API",
-    description="Backend dinámico para catálogo y automatizaciones de Futunet",
-    version="1.0.0"
-)
-
-# Configuración de CORS para permitir peticiones desde GitHub Pages
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # En producción puedes especificar tu dominio de GitHub Pages
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Dependencia de Sesión de Base de Datos ---
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    products: List[dict]
 
 # --- Endpoints ---
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "message": "Bienvenido a la API de Futunet"}
+    return {
+        "status": "online",
+        "firebase_connected": firebase_initialized,
+        "message": "Bienvenido a la API de Futunet (Firestore Sync Edition)"
+    }
 
-@app.get("/api/products", response_model=List[ProductSchema])
-def get_products(
-    category: Optional[str] = None,
-    department: Optional[str] = None,
-    brand: Optional[str] = None,
-    search: Optional[str] = None,
-    db: Session = Depends(get_db)
+@app.get("/api/products")
+def get_products(category: Optional[str] = None, department: Optional[str] = None):
+    """
+    Endpoint alternativo para obtener productos desde Firestore en Python.
+    Nota: El frontend principal sigue leyendo de Firebase de forma directa.
+    """
+    if not firebase_initialized:
+        raise HTTPException(status_code=500, detail="Firebase no está configurado.")
+    
+    try:
+        ref = db.collection("products")
+        query = ref.where("isActive", "==", True)
+        
+        if department:
+            query = query.where("department", "==", department)
+        if category:
+            query = query.where("category", "==", category)
+            
+        docs = query.stream()
+        products = []
+        for doc in docs:
+            products.append({"id": doc.id, **doc.to_dict()})
+        return products
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error consultando base de datos: {e}")
+
+@app.post("/api/sync-inventory")
+def sync_inventory(
+    products: List[ProductSyncItem],
+    x_sync_token: Optional[str] = Header(None)
 ):
-    query = db.query(ProductModel).filter(ProductModel.isActive == True)
-    
-    if department:
-        query = query.filter(ProductModel.department == department)
-    if category:
-        query = query.filter(ProductModel.category == category)
-    if brand:
-        query = query.filter(ProductModel.brand.ilike(brand))
+    """
+    Endpoint para sincronizar productos desde fuentes externas (como un scraper de proveedores).
+    Se protege usando un token simple en las cabeceras (X-Sync-Token).
+    """
+    if not firebase_initialized:
+        raise HTTPException(status_code=500, detail="Firebase no está configurado.")
         
-    products = query.all()
-    
-    # Búsqueda manual simple si se especifica término de búsqueda
-    if search:
-        search_lower = search.lower()
-        products = [
-            p for p in products
-            if search_lower in p.title.lower() or (p.desc and search_lower in p.desc.lower())
-        ]
+    # Validar token de seguridad simple
+    expected_token = os.getenv("SYNC_TOKEN", "default_secret_token")
+    if x_sync_token != expected_token:
+        raise HTTPException(status_code=401, detail="No autorizado.")
         
-    return products
-
-@app.get("/api/products/{product_id}", response_model=ProductSchema)
-def get_product(product_id: str, db: Session = Depends(get_db)):
-    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="Producto no encontrado")
-    return product
+    try:
+        batch = db.batch()
+        products_ref = db.collection("products")
+        
+        count = 0
+        for item in products:
+            # Generar un ID estable a partir del título del producto para evitar duplicados
+            clean_title = "".join(c for c in item.title if c.isalnum()).lower()
+            doc_id = f"sync_{item.brand.lower()}_{clean_title[:30]}"
+            
+            doc_ref = products_ref.document(doc_id)
+            data = item.dict()
+            data["id"] = doc_id
+            data["isActive"] = True
+            
+            batch.set(doc_ref, data)
+            count += 1
+            
+            # Firestore batch tiene un límite de 500 operaciones
+            if count >= 450:
+                batch.commit()
+                batch = db.batch()
+                count = 0
+                
+        batch.commit()
+        return {"success": True, "message": f"Sincronizados {len(products)} productos correctamente."}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error durante la sincronización: {e}")
 
 @app.post("/api/quote")
 def create_quote(quote: QuoteRequest):
-    # Aquí puedes procesar la cotización: guardar en BD, enviar correo, etc.
-    # Por ahora registramos la cotización simulando éxito
-    print(f"Cotización recibida de: {quote.client_name} ({quote.client_email})")
-    print(f"Productos cotizados: {quote.products}")
+    print(f"Cotización recibida para: {quote.client_name} ({quote.client_email})")
+    # Aquí puedes añadir código para guardar la cotización en Firestore o enviar un email/WhatsApp
     return {
         "success": True,
-        "message": f"Cotización recibida exitosamente. Nos comunicaremos contigo a {quote.client_email}."
+        "message": f"Cotización procesada exitosamente. Nos comunicaremos al correo {quote.client_email}."
     }
