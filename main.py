@@ -410,8 +410,9 @@ def send_email_with_pdf(quote: QuoteRequest, pdf_data: bytes, pdf_filename: str,
 def read_root():
     return {
         "status": "online",
+        "version": "2.1.0",
         "firebase_connected": firebase_initialized,
-        "message": "Bienvenido a la API de Futunet (Firestore Sync Edition)"
+        "message": "Bienvenido a la API de Futunet (PDF & SMTP Edition)"
     }
 
 
