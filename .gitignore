@@ -114,3 +114,5 @@ futunet.db-journal
 
 # Local environment settings
 .env
+firebase-service-account.json
+
