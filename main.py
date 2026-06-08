@@ -26,16 +26,25 @@ if cred_json:
     except Exception as e:
         print(f"❌ Error al inicializar Firebase con FIREBASE_CREDENTIALS: {e}")
 else:
+    # Comprobar tanto la ruta del archivo secreto de Render como la ruta del archivo local
     service_account_path = os.path.join(os.path.dirname(__file__), "firebase-service-account.json")
+    etc_secrets_path = "/etc/secrets/firebase-service-account.json"
+    
+    selected_path = None
     if os.path.exists(service_account_path):
+        selected_path = service_account_path
+    elif os.path.exists(etc_secrets_path):
+        selected_path = etc_secrets_path
+
+    if selected_path:
         try:
-            cred = credentials.Certificate(service_account_path)
+            cred = credentials.Certificate(selected_path)
             firebase_admin.initialize_app(cred)
             db = firestore.client()
             firebase_initialized = True
-            print("🔥 Firebase Admin inicializado mediante archivo local.")
+            print(f"🔥 Firebase Admin inicializado mediante archivo en: {selected_path}")
         except Exception as e:
-            print(f"❌ Error al inicializar Firebase con archivo local: {e}")
+            print(f"❌ Error al inicializar Firebase con archivo: {e}")
     else:
         print("⚠️ Advertencia: No se encontraron credenciales de Firebase. La API funcionará en modo degradado.")
 
