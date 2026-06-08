@@ -95,26 +95,6 @@ def read_root():
         "message": "Bienvenido a la API de Futunet (Firestore Sync Edition)"
     }
 
-@app.get("/api/debug-firebase")
-def debug_firebase():
-    import os
-    service_account_path = os.path.join(os.path.dirname(__file__), "firebase-service-account.json")
-    etc_secrets_path = "/etc/secrets/firebase-service-account.json"
-    
-    # Capturar también posibles errores de inicialización o excepciones
-    global firebase_initialized
-    return {
-        "firebase_connected": firebase_initialized,
-        "env_credentials_exists": os.getenv("FIREBASE_CREDENTIALS") is not None,
-        "env_credentials_length": len(os.getenv("FIREBASE_CREDENTIALS")) if os.getenv("FIREBASE_CREDENTIALS") else 0,
-        "local_file_exists": os.path.exists(service_account_path),
-        "etc_secrets_exists": os.path.exists(etc_secrets_path),
-        "current_dir": os.getcwd(),
-        "files_in_current_dir": os.listdir(os.getcwd()) if os.path.exists(os.getcwd()) else [],
-        "etc_secrets_dir_exists": os.path.exists("/etc/secrets"),
-        "files_in_etc_secrets": os.listdir("/etc/secrets") if os.path.exists("/etc/secrets") else []
-    }
-
 
 @app.get("/api/products")
 def get_products(category: Optional[str] = None, department: Optional[str] = None):
