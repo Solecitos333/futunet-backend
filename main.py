@@ -24,9 +24,10 @@ if cred_json:
         firebase_initialized = True
         print("🔥 Firebase Admin inicializado mediante variable de entorno.")
     except Exception as e:
-        print(f"❌ Error al inicializar Firebase con FIREBASE_CREDENTIALS: {e}")
-else:
-    # Comprobar tanto la ruta del archivo secreto de Render como la ruta del archivo local
+        print(f"❌ Error al inicializar Firebase con FIREBASE_CREDENTIALS (intentando fallback de archivo): {e}")
+
+# Si no se pudo inicializar con la variable de entorno, intentar con archivos
+if not firebase_initialized:
     service_account_path = os.path.join(os.path.dirname(__file__), "firebase-service-account.json")
     etc_secrets_path = "/etc/secrets/firebase-service-account.json"
     
@@ -45,8 +46,9 @@ else:
             print(f"🔥 Firebase Admin inicializado mediante archivo en: {selected_path}")
         except Exception as e:
             print(f"❌ Error al inicializar Firebase con archivo: {e}")
-    else:
-        print("⚠️ Advertencia: No se encontraron credenciales de Firebase. La API funcionará en modo degradado.")
+            
+if not firebase_initialized:
+    print("⚠️ Advertencia: No se encontraron credenciales de Firebase válidas. La API funcionará en modo degradado.")
 
 # --- Inicialización de FastAPI ---
 app = FastAPI(
